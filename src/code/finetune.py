@@ -1,19 +1,16 @@
 
-#formatting the test dataset for finetuning a code review model
+#formatting the test dataset for finetuning a code review model using ShareGPT format
+
 #%%
 import json
-from datasets import load_dataset, Dataset
-from unsloth import standardize_sharegpt
+from datasets import Dataset
+from unsloth import standardize_sharegpt, FastLanguageModel
 from unsloth.chat_templates import get_chat_template
 from transformers import AutoTokenizer
-from datasets import load_dataset, Dataset, Value
-from transformers import AutoTokenizer
-from unsloth.chat_templates import get_chat_template
-from unsloth import FastLanguageModel
-from trl import SFTTrainer, SFTConfig
+import jsonlines
 
+# format the dataset to concatinate ids to single string elem
 #%%
-
 fixed = []
 with open(r'/workspace/code/data/Code_Refinement/ref-test.jsonl', 'r') as f:
     for line in f:
@@ -23,7 +20,6 @@ with open(r'/workspace/code/data/Code_Refinement/ref-test.jsonl', 'r') as f:
         fixed.append(obj)
 
 # save back
-import jsonlines
 with jsonlines.open(r'/workspace/code/data/Code_Refinement/ref-train-fixed.jsonl', mode='w') as writer:
     writer.write_all(fixed)
 
@@ -39,7 +35,7 @@ def to_sharegpt_format(example):
     lang = example.get('lang', 'python')  # fallback if missing
 
     return {
-        "messages": [
+        "conversations": [
             {
                 "role": "system",
                 "content": f"You are a world-class code reviewer for {lang} projects."
@@ -68,21 +64,17 @@ raw_ds = raw_ds.map(to_sharegpt_format)
 std_ds = standardize_sharegpt(raw_ds)   
 
 #%%
-import transformers, sys,peft,trl,bitsandbytes
-print(peft.__version__)
-# %%
-
-
-
 tok = AutoTokenizer.from_pretrained(
     "unsloth/Llama-3.1-8B-Instruct", 
     trust_remote_code=True,
 )
 get_chat_template(tok, chat_template="llama-3.1")
 
+from trl import SFTTrainer, SFTConfig
+
 def fmt(example):
     txt = tok.apply_chat_template(
-        example["messages"],
+        example["conversations"],
         tokenize=False,
         add_generation_prompt=False
     )
@@ -95,8 +87,10 @@ max_seq_length = 2048
 
 model, _ = FastLanguageModel.from_pretrained(
     model_name = "unsloth/Llama-3.1-8B-Instruct",  # already quantised
-    load_in_4bit = False,
+    load_in_4bit  = False,     
     max_seq_length = max_seq_length,
+    trust_remote_code = True,     
+    fix_tokenizer = False, 
 )
 
 FastLanguageModel.for_inference(model)   
@@ -114,10 +108,10 @@ config = SFTConfig(
     max_seq_length = max_seq_length,
     per_device_train_batch_size = 4,    
     gradient_accumulation_steps   = 4,  
-    learning_rate = 2e-4,
-    warmup_steps = 20,
+    learning_rate  = 2e-4,
+    warmup_steps  = 20,
     num_train_epochs = 2,
-    logging_steps = 25,
+    logging_steps  = 25,
     optim = "adamw_8bit",
     seed  = 42,
     output_dir = "outputs-8b",
@@ -125,10 +119,10 @@ config = SFTConfig(
 
 
 trainer = SFTTrainer(
-    model  = model,
+    model = model,
     train_dataset = train_ds,
     tokenizer = tok,
-    args = config,
+    args  = config,
 )
 
 trainer.train()

@@ -1,0 +1,3 @@
+transformers==4.61.1
+unsloth==2025.1.8
+trl==0.14.0

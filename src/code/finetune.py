@@ -1,10 +1,12 @@
 
 #formatting the test dataset for finetuning a code review model using ShareGPT format
+
 #%%
 import json
 
 fixed = []
-with open(r'T:/code/coding-agent/data/ref-train.jsonl', 'r') as f:
+
+with open(r'/root/code/data/Code_Refinement/ref-test.jsonl', 'r') as f:
     for line in f:
         obj = json.loads(line)
         if 'ids' in obj:
@@ -13,7 +15,7 @@ with open(r'T:/code/coding-agent/data/ref-train.jsonl', 'r') as f:
 
 # save back
 import jsonlines
-with jsonlines.open(r'T:/code/coding-agent/data/ref-train-fixed.jsonl', mode='w') as writer:
+with jsonlines.open(r'/root/code/data/Code_Refinement/ref-train-fixed.jsonl', mode='w') as writer:
     writer.write_all(fixed)
 
 
@@ -23,7 +25,7 @@ from unsloth import standardize_sharegpt
 from unsloth.chat_templates import get_chat_template
 from transformers import AutoTokenizer
 from datasets import load_dataset, Dataset, Value
-raw_ds   = Dataset.from_json("T:/code/coding-agent/data/ref-test-fixed.jsonl")
+raw_ds   = Dataset.from_json('/root/code/data/Code_Refinement/ref-train-fixed.jsonl')
 def to_sharegpt_format(example):
     old_code = example['old_hunk'] or example['old']  # depending on quality
     comment  = example['comment']
@@ -62,15 +64,12 @@ std_ds = standardize_sharegpt(raw_ds)
 
 # %%
 import os
-
-os.environ['HF_HOME'] = "T:/huggingface_cache"
-hf_home = os.getenv('HF_HOME')
-print(hf_home)
 from transformers import AutoTokenizer
 from unsloth.chat_templates import get_chat_template
 from unsloth import FastLanguageModel
 tok = AutoTokenizer.from_pretrained("unsloth/llama-3.2-3b-instruct")
 get_chat_template(tok, chat_template="llama-3.2")
+from trl import SFTTrainer, SFTConfig
 
 # 2. Format your dataset
 def fmt(example):
@@ -81,13 +80,14 @@ def fmt(example):
     )
     return {"text": txt}
 
-train_ds = std_ds.map(fmt, remove_columns=std_ds.column_names)
 
+train_ds = std_ds.map(fmt, remove_columns=std_ds.column_names)
+max_seq_length = 2048
 model, model_tok = FastLanguageModel.from_pretrained(
     "unsloth/llama-3.2-3b-instruct",
-    load_in_4bit=False,
-    device_map="auto"
-)
+    load_in_4bit=True,
+    max_seq_length = max_seq_length,
+    )
 
 FastLanguageModel.for_inference(model)
 
@@ -96,21 +96,32 @@ model, _ = FastLanguageModel.from_pretrained(
     load_in_4bit=True,
     device_map="auto"
 )
+
 model = FastLanguageModel.get_peft_model(
     model,
-    r=16,
-    lora_alpha=32,
-    lora_dropout=0.05
+    r   = 16,
+    lora_alpha  = 32,
+    lora_dropout = 0.05,
+    use_gradient_checkpointing = "unsloth",
+    max_seq_length = max_seq_length,
 )
 
-FastLanguageModel.train(
-    model=model,
-    dataset=train_ds,
-    epochs=2,
-    batch_size=8,
-    lr=2e-4,
-    val_set_size=0.02,
-    train_text_field="text",
+trainer = SFTTrainer(
+    model         = model,
+    train_dataset = train_ds,          
+    tokenizer     = tok,
+    args          = SFTConfig(
+        dataset_text_field= "text",
+        max_seq_length = max_seq_length,
+        per_device_train_batch_size = 8,
+        gradient_accumulation_steps = 4,
+        warmup_steps  = 20,
+        num_train_epochs= 2,
+        logging_steps= 25,
+        optim = "adamw_8bit",
+        seed  = 42,
+    ),
 )
 
-model.save_pretrained("llama3.2-code_review-lora")
+trainer.train()                 
+model.save_pretrained("llama3.2‑code_review‑lora")
